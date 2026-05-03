@@ -36,7 +36,7 @@ export const EnvSchema = z.object({
   // Server Settings
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('debug'),
-  MCP_ROUTE_STDOUT_LOGS: z.preprocess(stringToBoolean, z.boolean().default(true)),
+  MCP_ROUTE_STDOUT_LOGS: z.preprocess(stringToBoolean, z.boolean()).default(true),
 
   // Unreal Settings
   UE_PROJECT_PATH: z.string().optional(),
@@ -44,13 +44,13 @@ export const EnvSchema = z.object({
 
 
   // Connection Settings
-  MCP_AUTOMATION_PORT: z.preprocess((v) => stringToNumber(v, 8091), z.number().default(8091)),
+  MCP_AUTOMATION_PORT: z.preprocess((v) => stringToNumber(v, 8091), z.number()).default(8091),
   MCP_AUTOMATION_HOST: z.string().default('127.0.0.1'),
-  MCP_AUTOMATION_CLIENT_MODE: z.preprocess(stringToBoolean, z.boolean().default(false)),
+  MCP_AUTOMATION_CLIENT_MODE: z.preprocess(stringToBoolean, z.boolean()).default(false),
 
   // Timeouts
-  MCP_CONNECTION_TIMEOUT_MS: z.preprocess((v) => stringToNumber(v, 5000), z.number().default(5000)),
-  MCP_REQUEST_TIMEOUT_MS: z.preprocess((v) => stringToNumber(v, 30000), z.number().default(30000)),
+  MCP_CONNECTION_TIMEOUT_MS: z.preprocess((v) => stringToNumber(v, 5000), z.number()).default(5000),
+  MCP_REQUEST_TIMEOUT_MS: z.preprocess((v) => stringToNumber(v, 30000), z.number()).default(30000),
 
   // Tool Categories (comma-separated: core,world,authoring,gameplay,utility,all)
   MCP_DEFAULT_CATEGORIES: z.string().default('core'),

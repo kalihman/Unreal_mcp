@@ -1,0 +1,71 @@
+import { describe, it, expect } from 'vitest';
+import { EnvSchema } from '../../src/config.js';
+
+describe('EnvSchema env var defaults (Zod v4 compatibility)', () => {
+    it('parse({}) returns documented defaults for preprocessed boolean fields', () => {
+        const result = EnvSchema.parse({});
+        expect(result.MCP_ROUTE_STDOUT_LOGS).toBe(true);
+        expect(result.MCP_AUTOMATION_CLIENT_MODE).toBe(false);
+    });
+
+    it('parse({}) returns documented defaults for preprocessed number fields', () => {
+        const result = EnvSchema.parse({});
+        expect(result.MCP_AUTOMATION_PORT).toBe(8091);
+        expect(result.MCP_CONNECTION_TIMEOUT_MS).toBe(5000);
+        expect(result.MCP_REQUEST_TIMEOUT_MS).toBe(30000);
+    });
+
+    it('parse({}) returns documented defaults for plain (non-preprocessed) fields', () => {
+        const result = EnvSchema.parse({});
+        expect(result.NODE_ENV).toBe('development');
+        expect(result.LOG_LEVEL).toBe('debug');
+        expect(result.MCP_AUTOMATION_HOST).toBe('127.0.0.1');
+        expect(result.MCP_DEFAULT_CATEGORIES).toBe('core');
+        expect(result.MCP_ADDITIONAL_PATH_PREFIXES).toBe('');
+    });
+
+    it('respects user-set boolean strings ("true"/"false")', () => {
+        const result = EnvSchema.parse({
+            MCP_ROUTE_STDOUT_LOGS: 'false',
+            MCP_AUTOMATION_CLIENT_MODE: 'true',
+        });
+        expect(result.MCP_ROUTE_STDOUT_LOGS).toBe(false);
+        expect(result.MCP_AUTOMATION_CLIENT_MODE).toBe(true);
+    });
+
+    it('respects user-set number strings', () => {
+        const result = EnvSchema.parse({
+            MCP_AUTOMATION_PORT: '3000',
+            MCP_CONNECTION_TIMEOUT_MS: '1000',
+            MCP_REQUEST_TIMEOUT_MS: '60000',
+        });
+        expect(result.MCP_AUTOMATION_PORT).toBe(3000);
+        expect(result.MCP_CONNECTION_TIMEOUT_MS).toBe(1000);
+        expect(result.MCP_REQUEST_TIMEOUT_MS).toBe(60000);
+    });
+
+    it('partial input mixes user values and defaults', () => {
+        const result = EnvSchema.parse({
+            MCP_AUTOMATION_PORT: '7777',
+        });
+        expect(result.MCP_AUTOMATION_PORT).toBe(7777);
+        expect(result.MCP_ROUTE_STDOUT_LOGS).toBe(true);
+        expect(result.MCP_AUTOMATION_CLIENT_MODE).toBe(false);
+        expect(result.MCP_CONNECTION_TIMEOUT_MS).toBe(5000);
+        expect(result.MCP_REQUEST_TIMEOUT_MS).toBe(30000);
+    });
+
+    it('garbage boolean strings fall back to false (preprocess contract)', () => {
+        const result = EnvSchema.parse({
+            MCP_ROUTE_STDOUT_LOGS: 'not-a-bool',
+        });
+        expect(result.MCP_ROUTE_STDOUT_LOGS).toBe(false);
+    });
+
+    it('non-numeric port strings fall back to documented default', () => {
+        const result = EnvSchema.parse({
+            MCP_AUTOMATION_PORT: 'abc',
+        });
+        expect(result.MCP_AUTOMATION_PORT).toBe(8091);
+    });
+});
