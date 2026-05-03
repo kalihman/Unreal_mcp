@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { EnvSchema } from '../../src/config.js';
 
 describe('EnvSchema env var defaults (Zod v4 compatibility)', () => {
@@ -67,5 +67,32 @@ describe('EnvSchema env var defaults (Zod v4 compatibility)', () => {
             MCP_AUTOMATION_PORT: 'abc',
         });
         expect(result.MCP_AUTOMATION_PORT).toBe(8091);
+    });
+});
+
+describe('config module load (regression: src/config.ts must not throw on empty env)', () => {
+    const originalEnv = process.env;
+
+    afterEach(() => {
+        process.env = originalEnv;
+        vi.resetModules();
+    });
+
+    it('importing src/config.js with no affected env vars set yields documented defaults', async () => {
+        process.env = { ...originalEnv };
+        delete process.env.MCP_ROUTE_STDOUT_LOGS;
+        delete process.env.MCP_AUTOMATION_PORT;
+        delete process.env.MCP_AUTOMATION_CLIENT_MODE;
+        delete process.env.MCP_CONNECTION_TIMEOUT_MS;
+        delete process.env.MCP_REQUEST_TIMEOUT_MS;
+        vi.resetModules();
+
+        const mod = await import('../../src/config.js');
+
+        expect(mod.config.MCP_ROUTE_STDOUT_LOGS).toBe(true);
+        expect(mod.config.MCP_AUTOMATION_PORT).toBe(8091);
+        expect(mod.config.MCP_AUTOMATION_CLIENT_MODE).toBe(false);
+        expect(mod.config.MCP_CONNECTION_TIMEOUT_MS).toBe(5000);
+        expect(mod.config.MCP_REQUEST_TIMEOUT_MS).toBe(30000);
     });
 });
