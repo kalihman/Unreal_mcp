@@ -30,7 +30,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 
 const TEST_FOLDER = '/Game/IntegrationTest';
-const BB_NAME = 'BB_GetAiInfoCharacterization';
+// Unique per-run name so concurrent invocations against the same UE editor do
+// not race on a shared `create -> add_key -> delete` sequence on the same asset.
+const BB_NAME = `BB_GetAiInfoCharacterization_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const BB_PATH = `${TEST_FOLDER}/${BB_NAME}`;
 
 const transport = new StdioClientTransport({
@@ -41,15 +43,27 @@ const transport = new StdioClientTransport({
 
 const client = new Client({ name: 'pr0a-characterization', version: '0.0.1' }, { capabilities: {} });
 
+/**
+ * Invoke an MCP tool and return its `structuredContent` payload.
+ *
+ * Reads from `structuredContent` (the canonical JSON envelope this MCP server
+ * emits for automation responses); the sibling `content[0].text` is a flat
+ * human-readable summary, not JSON, and is intentionally ignored except for
+ * surfacing detail on transport-level `isError`. Throws on any of:
+ *   - transport `isError: true`
+ *   - missing `structuredContent`
+ *   - `structuredContent.success === false`
+ *
+ * @param {string} toolName  Tool identifier (e.g. `manage_ai`, `manage_asset`).
+ * @param {object} args      Tool arguments forwarded as `arguments`.
+ * @returns {Promise<object>} The parsed `structuredContent` object.
+ */
 async function call(toolName, args) {
   const res = await client.callTool({ name: toolName, arguments: args });
   if (res?.isError) {
     const detail = (res?.content?.[0]?.text ?? '').slice(0, 500);
     throw new Error(`Tool ${toolName} returned isError; detail: ${detail}`);
   }
-  // MCP server wraps the C++ automation_response in `structuredContent`. The
-  // human-readable `content[0].text` is a flat summary, not JSON, so we read
-  // structuredContent directly.
   const sc = res?.structuredContent;
   if (!sc) throw new Error(`No structuredContent from ${toolName}`);
   if (sc.success === false) {
