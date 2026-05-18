@@ -30,10 +30,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 
 const TEST_FOLDER = '/Game/IntegrationTest';
-// Unique per-run name so concurrent invocations against the same UE editor do
-// not race on a shared `create -> add_key -> delete` sequence on the same asset.
-const BB_NAME = `BB_GetAiInfoCharacterization_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-const BB_PATH = `${TEST_FOLDER}/${BB_NAME}`;
+// Each run lives inside its own temp folder under TEST_FOLDER. Sweeping that
+// folder in `finally` removes every artifact this run created, even ones an
+// individual asset-level delete might miss (and keeps prior runs that crashed
+// before cleanup isolated to their own tag rather than scattering siblings).
+const RUN_TAG = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+const RUN_FOLDER = `${TEST_FOLDER}/PR0a_run_${RUN_TAG}`;
+const BB_NAME = 'BB_GetAiInfoCharacterization';
 
 const transport = new StdioClientTransport({
   command: 'node',
@@ -66,33 +69,78 @@ async function call(toolName, args) {
   }
   const sc = res?.structuredContent;
   if (!sc) throw new Error(`No structuredContent from ${toolName}`);
-  if (sc.success === false) {
-    throw new Error(`Tool ${toolName} reported success:false; payload: ${JSON.stringify(sc).slice(0, 500)}`);
+  // Reject anything that is not an explicit success — strict `!== true` so a
+  // response that omits the field (which can happen on some MCP servers
+  // depending on result-class) doesn't slip through and let downstream code
+  // operate on an unverified payload.
+  if (sc.success !== true) {
+    throw new Error(`Tool ${toolName} did not report success:true; payload: ${JSON.stringify(sc).slice(0, 500)}`);
   }
   return sc;
 }
 
+/**
+ * Call `add_blackboard_key` with a short retry. The first add after
+ * `create_blackboard_asset` can race the UE asset registry's visibility
+ * propagation; subsequent adds run after the BB is already registered, so
+ * only the first invocation needs this guard.
+ *
+ * @param {object} args  Arguments forwarded to `add_blackboard_key`.
+ * @param {number} attempts  Total tries including the first.
+ * @param {number} delayMs   Backoff between tries (linear, kept small).
+ * @returns {Promise<object>} The `call()` result of the successful attempt.
+ */
+async function addKeyWithRetry(args, attempts = 3, delayMs = 100) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await call('manage_ai', { action: 'add_blackboard_key', ...args });
+    } catch (e) {
+      lastErr = e;
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  throw lastErr;
+}
+
 let exitCode = 0;
+// Hoisted so `finally` can target the created BB explicitly. Without this, the
+// folder-delete code path enumerates assets via McpSafeDeleteFolder which, for
+// some asset classes (BlackboardData observed in UE 5.7), triggers an
+// interactive "Delete Assets" modal that wedges the editor main thread and
+// times out the request at 30s. Deleting the asset directly first uses a
+// quieter UEditorAssetLibrary::DeleteAsset path; the subsequent folder delete
+// then takes the fast empty-folder branch.
+let bbPath = '';
 try {
   // Connect inside try so a failed connect (transport spawn / MCP handshake) still hits the finally cleanup
   await client.connect(transport);
 
-  // Idempotent setup — best-effort delete of any leftover from prior failed runs
-  try { await call('manage_asset', { action: 'delete', path: BB_PATH, force: true }); } catch {}
+  // Safety belt: if a prior process somehow used the same RUN_TAG (essentially
+  // impossible with timestamp + random suffix), best-effort sweep its folder.
+  try { await call('manage_asset', { action: 'delete', path: RUN_FOLDER, force: true }); } catch {}
 
-  // Setup
-  // create_folder is best-effort: if /Game/IntegrationTest already exists from a prior
-  // test run (or shared with tests/integration.mjs), the call may report success:false
-  // which call() converts to a throw — wrap so we tolerate "already exists" silently.
+  // Setup — create_folder is best-effort for both the shared parent (may already
+  // exist from tests/integration.mjs) and the per-run subfolder.
   try { await call('manage_asset', { action: 'create_folder', path: TEST_FOLDER }); } catch {}
-  await call('manage_ai', { action: 'create_blackboard_asset', path: TEST_FOLDER, name: BB_NAME });
-  await call('manage_ai', { action: 'add_blackboard_key', blackboardPath: BB_PATH, keyName: 'Spotted',       keyType: 'Bool' });
-  await call('manage_ai', { action: 'add_blackboard_key', blackboardPath: BB_PATH, keyName: 'TargetActor',   keyType: 'Object', baseObjectClass: 'Actor' });
-  await call('manage_ai', { action: 'add_blackboard_key', blackboardPath: BB_PATH, keyName: 'WaypointIndex', keyType: 'Int' });
-  await call('manage_ai', { action: 'set_key_instance_synced', blackboardPath: BB_PATH, keyName: 'WaypointIndex', isInstanceSynced: true });
+  try { await call('manage_asset', { action: 'create_folder', path: RUN_FOLDER }); } catch {}
+
+  // Use the bbPath returned by create_blackboard_asset (the canonical UE object
+  // path, e.g. "/Game/.../BB_Name.BB_Name") for every follow-up call rather than
+  // a client-side string concat. Insulates the test against any future server-
+  // side path normalization changes.
+  const createResp = await call('manage_ai', { action: 'create_blackboard_asset', path: RUN_FOLDER, name: BB_NAME });
+  bbPath = createResp.result?.blackboardPath ?? '';
+  assert.ok(bbPath, 'create_blackboard_asset must return result.blackboardPath');
+
+  // First add retries the asset-registry visibility race; later adds don't need it.
+  await addKeyWithRetry({ blackboardPath: bbPath, keyName: 'Spotted', keyType: 'Bool' });
+  await call('manage_ai', { action: 'add_blackboard_key', blackboardPath: bbPath, keyName: 'TargetActor',   keyType: 'Object', baseObjectClass: 'Actor' });
+  await call('manage_ai', { action: 'add_blackboard_key', blackboardPath: bbPath, keyName: 'WaypointIndex', keyType: 'Int' });
+  await call('manage_ai', { action: 'set_key_instance_synced', blackboardPath: bbPath, keyName: 'WaypointIndex', isInstanceSynced: true });
 
   // Action under test
-  const resp = await call('manage_ai', { action: 'get_ai_info', blackboardPath: BB_PATH });
+  const resp = await call('manage_ai', { action: 'get_ai_info', blackboardPath: bbPath });
 
   // Envelope
   assert.equal(resp.success, true, 'structuredContent.success must be true');
@@ -152,8 +200,16 @@ try {
   if (err?.stack) console.error(err.stack);
   exitCode = 1;
 } finally {
-  // Teardown — best-effort, do NOT throw if cleanup fails
-  try { await call('manage_asset', { action: 'delete', path: BB_PATH, force: true }); } catch {}
+  // Two-step teardown, best-effort. Step 1 deletes the BB asset by its exact
+  // path so the plugin takes the single-asset code path (silent
+  // UEditorAssetLibrary::DeleteAsset). Step 2 then sweeps the now-empty
+  // RUN_FOLDER; the empty-folder fast path skips asset enumeration entirely.
+  // This avoids the interactive "Delete Assets" modal that the folder-delete
+  // code path can raise for some asset classes in UE 5.7.
+  if (bbPath) {
+    try { await call('manage_asset', { action: 'delete', path: bbPath, force: true }); } catch {}
+  }
+  try { await call('manage_asset', { action: 'delete', path: RUN_FOLDER, force: true }); } catch {}
   try { await client.close(); } catch {}
 }
 
